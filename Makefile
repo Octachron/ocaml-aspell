@@ -1,4 +1,4 @@
-compile=ocamlbuild -use-ocamlfind -I src -lflags -cclib,-laspell
+compile=ocamlbuild -use-ocamlfind -I src -I tests -lflags -cclib,-laspell
 
 all:
-	$(compile) aspell.native
+	$(compile) suggestion.native

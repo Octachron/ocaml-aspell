@@ -1,3 +1,4 @@
 S src
-B _build
+S tests
+B _build/*
 PKG ctypes ctypes.foreign
