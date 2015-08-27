@@ -1,145 +1,113 @@
 open Ctypes
-open Foreign    
+open Foreign
+open Aspell_common
+open Aspell_raw
 
-let names core = core, core ^ "_", "_"^ core
-
-module Type_id = struct
-  type t
-  let t : t union typ = union "AspellTypeId"
-
-  let num = field t "num" uint
-  let str = field t "str" string
-  let () = seal t
-end
-
-module Mutable_container = struct
-  type t
-  let prim_t : t structure typ = structure "AspellMutableContainer"
-  let t = ptr prim_t
-  let add = foreign "aspell_mutable_container_add" @@ t @-> string @-> returning bool
-  let remove = foreign "aspell_mutable_container_remove" @@ t @-> string @-> returning bool
-  let clear =  foreign "aspell_mutable_container_clear" @@ t @-> returning void 
-  let convert =  foreign  "aspell_mutable_container_to_mutable_container" @@ t @-> returning t
-end
-
-module Make_enum( Core:
-                  sig
-                    val s_name: string
-                    val core_name : string
-                    type r
-                    val r : r option Ctypes_static.typ 
-                  end ) =
-struct
-  type t
-  let prim_t: t structure typ = structure Core.s_name
-  let t = ptr prim_t
-  let core_name, pre, post = names Core.core_name
-  let fp name typ = foreign (pre^name) typ
-  let fpt name typ = foreign (name^post) typ
-
-  let delete = fpt "delete" @@ t @-> returning void
-  let clone = fp "clone" @@ t @-> returning t
-  let assign = fp "assign" @@ t @-> t @-> returning t
-  let at_end = fp "at_end" @@ t @-> returning bool
-  let next = fp "next" @@ t @-> returning Core.r (* nullable *)
-  let to_list seq =
-    let rec build l =
-      match next seq with
-      | None -> List.rev l
-      | Some a -> build (a::l) in
-    build []
-    
-end
-
-module StringPair = struct
-  type s
-  let t : s structure typ = structure "AspellStringPair"
-  let first = field t "first" string
-  let second = field t "second" string
-end
-
-module StringPairEnum = Make_enum (struct
-    let s_name =  "AspellStringPairEnumeration"
-    let core_name = "aspell_string_pair_enumeration"
-    type r = StringPair.s structure Ctypes_static.ptr
-    let r = ptr_opt StringPair.t
-    end
-  )
+(* let version = foreign "aspell_version_string" @@ void @-> returning string; *)
 
 type 'a colored_int = private int
 
-(** Configuration key *)
-module Key_info = struct
+module Key = Aspell_common.Key
+
   
-  (** The type of the key *)
-  type kind = String | Int | Bool | List
-  let kind =
-    view
-      ~read:( function 0 -> String | 1 -> Int | 2 -> Bool | 3 -> List | _ -> assert false) 
-      ~write: ( function String -> 0 | Int -> 1 | Bool -> 2 | List -> 3 )
-      int
-  
-  type t
-  let t : t structure typ = structure "AspellKeyInfo"
-  let ptr_t = ptr t
-
-  (** The name of the key *)
-  let name = field t "name" string
-  (** Key type *)
-  let type_ = field t "type_" kind
-  (** Default value *) 
-  let def = field t "def" string
-  (** Brief description *)
-  let desc = field t "desc" string
-  (** Flags? *)
-  let flags = field t "flags" int
-  (** Other data?? *)
-  let other_data = field t "other_data" int
-  let () = seal t
-end
-
-module Key_list = struct
-  type t
-  let prim_t : t structure typ = structure "AspellKeyInfoEnumeration"
-  let t = ptr prim_t
-  let is_at_end = foreign "aspell_key_info_enumeration_at_end" @@ t @-> returning bool
-  let next  =foreign "aspell_key_info_enumeration_next" @@ t @-> returning t 
-  let clone = foreign "aspell_key_info_enumeration_clone" @@ t @-> returning t
-  let assign = foreign "aspell_key_info_enumeration_assign" @@ t @-> t @-> returning void
-
-end
-
 module Error = struct
-  type info
-  let info : info structure typ = structure "AspellErrorInfo"
-  let isa = field info "isa" @@ ptr info
-  let mesg = field info "mesg" string
-  let num_parms = field info "num_parms" uint
-  let parms = field info "parms"@@ ptr string
+
+  
+  type info_c
+  let info : info_c structure typ = structure "AspellErrorInfo"
+  let isa = field info "isa" @@ ptr_opt info
+  let mesg = field info "mesg" string_flat
+  let num_parms = field info "num_parms" int
+  let parms = field info "parms"@@ ptr string_flat
   let () = seal info
 
+  let mesg_i = mesg
   
-  type t
-  let t : t structure typ = structure "AspellError"
-  let mesg = field t "mesg" string
-  let err = field t "mesg" (ptr info)
-  let () = seal t
+  type info = {
+    mesg: string
+  ; num_parms: int
+  ; parms : string array          
+  }
 
-let is_a = foreign "aspell_error_is_a" @@ ptr t @-> ptr info @-> returning bool
+
+  let show {mesg;num_parms;parms} =
+    Array.fold_left (Printf.sprintf "%s,\n%s") 
+      ( Printf.sprintf "Error info: %s %d\n" mesg num_parms )
+      parms 
+
+  
+  let info =
+    let rec read x =
+      let i =
+        {
+          mesg = getf x mesg
+        ; num_parms = getf x num_parms
+        ; parms = Array.make 3 "" (*Array.of_list @@ CArray.( to_list @@ from_ptr (getf x parms) 3 )*)
+        } in
+      match getf x isa with
+      | None -> [i]
+      | Some isa -> i :: read (!@isa) in
+    let rec write =
+      function
+      | [] -> assert false
+      | [a] -> write_elt a None
+      | a::b -> write_elt a @@ Some (allocate info @@ write b)
+  and write_elt a q =                   
+        let r = make info in
+        let () =
+          setf r mesg a.mesg
+        ; setf r num_parms @@ a.num_parms
+        ; setf r parms @@ ( CArray.start ( CArray.of_list string @@ Array.to_list a.parms ) )
+        ; setf r isa @@  q in
+       r in
+    view ~read ~write info
+  
+  
+  type c
+  let c : c structure typ = structure "AspellError"
+  let mesg = field c "mesg" string_flat
+  let err = field c "mesg" info
+  let () = seal c
+
+  type t = {
+    mesg : string
+  ; err : info list  
+  } 
+
+  let t_gen ~read ~write t =
+    let read x = let x = read x in {
+      mesg = getf x mesg;
+      err = getf x err
+    } 
+    and write x =
+      let r = make c in
+      let () =
+        setf r mesg x.mesg
+      ; setf r err x.err in
+      write r
+    in view ~read ~write t
+
+  let id x = x
+  let t =t_gen ~read:id ~write:id c
+  let ptr_t = t_gen ~read:(fun x -> !@ x) ~write:(fun x -> allocate c x) (ptr c)
+  
+let is_a = foreign "aspell_error_is_a" @@ ptr_t @-> ptr info @-> returning bool
 
 let bind prefix typ =
   let f name rtyp = foreign (prefix^"error"^name) @@ typ @-> returning rtyp in 
-  f "_number" uint, f "_message" string, f "" (ptr t)
+  f "_number" uint, f "_message" string, f "" ptr_t
 
 end
 
 module Config = struct
-  type t
-  let prim_t : t structure typ = structure "AspellConfig"         
-  let t = ptr prim_t
+  type prim
+  type t = prim Ctypes.structure Ctypes_static.ptr
+      
+  let prim_t : prim structure typ = structure "AspellConfig"         
+  let t : t typ = ptr prim_t
 
   let pre = "aspell_config_"
-  let create = foreign "new_aspell_config" ( void @-> returning t )
+  let create : unit -> t = foreign "new_aspell_config" ( void @-> returning t )
   let replace = foreign "aspell_config_replace" ( t @-> string @-> string @-> returning void)
   let clone = foreign "aspell_config_clone" ( t @-> returning t )
   let delete = foreign "delete_aspell_config" ( t @-> returning void )
@@ -157,18 +125,25 @@ module Config = struct
      the beginning and ending of an array of Aspell
      Key Info.
   *)
-  let set_extra = foreign "aspell_config_set_extra" @@ t @-> ptr Key_info.t @-> ptr Key_info.t @-> returning void
+  let set_extra conf extras =
+    let c = foreign "aspell_config_set_extra" @@ t @-> ptr Key.info @-> ptr Key.info @-> returning void in
+    let a = CArray.of_list Key.info  extras in
+    let s = CArray.start a in
+    let e = s +@ CArray.length a in
+    c conf s e
 
 (** Returns the KeyInfo object for the
     corresponding key or returns NULL and sets
     error_num to PERROR_UNKNOWN_KEY if the key is
     not valid. The pointer returned is valid for
     the lifetime of the object. *)
-  let key_info = foreign "aspell_config_keyinfo" @@ t @-> string @-> returning (ptr Key_info.t)
+  let key_info = foreign "aspell_config_keyinfo" @@ t @-> string @-> returning (opt Key.info)
                                                       
   (** Returns a newly allocated enumeration of all
       the possible objects this config class uses. *)
-  let possible_elements = foreign "aspell_config_possible_elements" @@ t @-> bool @-> returning Key_list.t
+  let possible_elements =
+    let c = foreign "aspell_config_possible_elements" @@ t @-> bool @-> returning Key_enum.t in
+    fun t bool -> Key_enum.to_list @@ c t bool
 
   (** Returns the default value for given key which
     may involve substituting variables, thus it is
@@ -184,7 +159,7 @@ module Config = struct
  the key/value pairs. This DOES not include ones
  which are set to their default values. */
 *)
-let elements = foreign "aspell_config_elements" @@ ptr t @-> returning ( ptr StringPairEnum.t)
+  let elements = StringPairEnum.listify @@ foreign "aspell_config_elements" @@ t @-> returning StringPairEnum.t
 
 (** Inserts an item, if the item already exists it
     will be replaced. Returns TRUE if it succeeded
@@ -217,7 +192,7 @@ let remove = foreign "aspell_config_remove" @@ t @-> string @-> returning bool
 let mem = foreign "aspell_config_have" @@ t @-> string @-> returning bool
                                           
 (** Returns NULL on error. *)
-let find = foreign "aspell_config_retrieve" @@ t @-> string @-> returning string_opt
+let find_string = foreign "aspell_config_retrieve" @@ t @-> string @-> returning string_opt
 let find_list = foreign "aspell_config_retrieve_list" @@ t @-> string @-> Mutable_container.t @-> returning bool
 (** In "ths" Aspell configuration, search for a
   character string matching "key" string.
@@ -230,6 +205,36 @@ let find_bool = foreign "aspell_config_retrieve_bool" @@ t @-> string @-> return
   integer value matching "key" string.
     Return -1 on error. *)
 let find_int = foreign "aspell_config_retrieve_int" @@ t @-> string @-> returning int
+
+let find config key =
+  let open Key in
+  match key_info config key with
+  | None -> None
+  | Some k -> 
+    match k.type_ with
+    | Int ->
+      let n = find_int config key in
+      if n = -1 then None else Some ( Int n )
+    | String ->
+      let s = find_string config key in
+      ( match s with
+        | None -> None
+        | Some s -> Some ( String s )
+      )
+    | Bool ->
+      let b = find_bool config key in
+      (match b with
+       | -1 -> None
+       | 0 -> Some (Bool true)
+       | 1 -> Some (Bool false)
+       | _ -> assert false
+      )
+    | List ->
+      let l = String_list.create () in
+      let m = String_list.to_mutable_container l  in
+      match find_list config key m with
+      | false -> None
+      | true -> Some ( List ( String_list.to_list l ) )
 
 end
 
@@ -253,120 +258,75 @@ module Result = struct
 end
 
     
-module String_enum = Make_enum (struct
-    let s_name = "AspellStringEnumeration"
-    let core_name = "aspell_string_enumeration"
-    type r = string
-    let r = string_opt
-  end)
-    
-module String_list = struct
-  type t
-  let prim_t : t structure typ = structure "AspellStringList"
-  let t  = ptr prim_t
-  let corename, pre,post = names "aspell_string_list"
-  let fp name typ  = foreign (pre^name) typ
-  let fpt name typ= foreign (name ^ post ) typ
-
-  let create = fpt "new" @@ void @-> returning t
-  let is_empty = fp "empty" @@ t @-> returning bool
-  let size = fp "size" @@ t @-> returning int
-
-  let elements = fp "elements" @@ t @-> returning String_enum.t
-  let to_list c = String_enum.to_list @@ elements c
-
-  
-  let add = fp "add" @@ t @-> string @-> returning bool
-  let remove = fp "remove" @@ t @-> string @-> returning bool
-
-  let from_list l =
-    let c = create () in
-    List.iter (fun x -> ignore @@ add c x) l ;
-    c
-  
-  let clear = fp "clear" @@ t @-> returning void
-
-  let to_mutable_container = fp "to_mutable_container" @@ t @-> returning Mutable_container.t
-
-  let delete = fpt "delete" @@ t @-> returning void
-  let clone = fp "clone" @@ t @-> returning t
-  let assign = fp "assign" @@ t @-> t @-> returning void
-end
-
-module Word_list = struct
-  type t
-  let prim_t: t structure typ = structure "AspellWordList"
-  let t = ptr prim_t
-
-  
-  let is_empty = foreign "aspell_word_list_empty" ( t @-> returning bool )
-  let size = foreign "aspell_word_list_size" ( t @-> returning int )
-
-  let c_elements = foreign "aspell_word_list_elements" ( t @-> returning String_enum.t )
-
-      
-  let to_list wlist =
-    String_enum.to_list @@ c_elements wlist 
-
-end
-
 
   let (@@@) f x = f x (String.length x) 
 
 module Speller = struct
-  type t
-  let prim_t : t structure typ = structure "AspellSpeller"
+  type prim
+  let prim_t : prim structure typ = structure "AspellSpeller"
+  type t =  prim Ctypes.structure Ctypes_static.ptr
   let t = ptr prim_t
   let pre = "aspell_speller_"
   let fp name typ = foreign (pre^name) typ 
   
-  
-  let c_create = foreign "new_aspell_speller" ( Config.t @-> returning Result.c)
 
+  let unwrap = foreign "to_aspell_speller" ( Result.c @-> returning t )
+ let create config = 
+  let c_create = foreign "new_aspell_speller" ( Config.t @-> returning Result.c)
+  in Result.convert unwrap @@ c_create config 
+  
 (** returns  0 if it is not in the dictionary,
     1 if it is, or -1 on error. *)
-  let c_check = fp "check" @@ t @-> string @-> int @-> returning bool
-  let unwrap = foreign "to_aspell_speller" ( Result.c @-> returning t )
-  let c_suggest =  fp "suggest" @@ t @-> string @-> int @-> returning Word_list.t
+ let check speller word = 
+   let c_check = fp "check" @@ t @-> string @-> int @-> returning int in
+   match c_check speller @@@ word with
+   | 0 -> Some false
+   | 1 -> Some true
+   | _ -> None
+   
+  let suggest s word=
+    let c_suggest = fp "suggest" @@ t @-> string @-> int @-> returning Word_list.t in
+    Word_list.to_list @@ c_suggest s @@@ word 
 
-  let c_store_replace = fp "store_replacement" @@ t @-> string @-> int @-> string @-> int @-> returning void
+  let store_replace =
+    let c = fp "store_replacement" @@ t @-> string @-> int @-> string @-> int @-> returning void in
+    fun speller mispelled replacement ->
+      (c speller @@@ mispelled) @@@ replacement
 
-  let c_add_to_session = fp "add_to_session"@@  t @-> string @-> int @-> returning void
-  let c_add_to_personal = fp "add_to_personal" @@ t @-> string @-> int @-> returning void
+  let add_to_session =
+    let c= fp "add_to_session"@@  t @-> string @-> int @-> returning void in
+    fun t word -> c t @@@ word
+      
+  let add_to_personal =
+    let c = fp "add_to_personal" @@ t @-> string @-> int @-> returning void in
+    fun t word -> c t @@@ word
   
-  let create config = Result.convert unwrap @@ c_create config 
   let delete = foreign "delete_aspell_speller" ( t @-> returning void )
   
-  let check speller word = c_check speller @@@ word    
-  let suggest speller word = Word_list.to_list @@ c_suggest speller @@@ word
-  
-  let store_replace speller mispelled replacement =
-    c_store_replace speller @@@ mispelled @@@ replacement
-  
-  let add_to_session speller word= c_add_to_session speller @@@ word 
-  let add_to_personal speller word= c_add_to_personal speller @@@ word 
-
   let error_number, error_msg, error = Error.bind pre t
-
   let config = fp "config" @@ t @-> returning Config.t                                                      
                                                               
-  let c_personal_word_list = fp "personal_word_list" @@ t @-> returning Word_list.t
-  let personal_word_list speller = Word_list.to_list @@ c_personal_word_list speller 
-
-  let c_session_word_list = fp "session_word_list" @@ t @-> returning Word_list.t
-  let session_word_list speller = Word_list.to_list @@ c_session_word_list speller 
-
-  let c_main_word_list = fp "main_word_list" @@ t @-> returning Word_list.t
-  let main_word_list speller = Word_list.to_list @@ c_main_word_list speller 
-
+  let personal_word_list list=
+    let f = fp "personal_word_list" @@ t @-> returning Word_list.t in
+    Word_list.to_list @@ f list
+  
+  let session_word_list list=
+    let f = fp "session_word_list" @@ t @-> returning Word_list.t in
+    Word_list.to_list @@ f list
+  let main_word_list list =
+    let f = fp "main_word_list" @@ t @-> returning Word_list.t in
+    Word_list.to_list @@ f list
+ 
+  
   let save_all_word_lists = fp "save_all_word_lists" @@ t @-> returning bool
   let clear_session = fp "clear_session" @@ t @-> returning bool
   
 end
 
 module Filter = struct
-  type t
-  let prim_t : t structure typ = structure "AspellFilter"
+  type prim
+  let prim_t : prim structure typ = structure "AspellFilter"
+  type t = prim Ctypes.structure Ctypes_static.ptr
   let t = ptr prim_t
   let pre = "aspell_filter_"
   
@@ -381,15 +341,26 @@ end
 
 
 module Document_checker = struct
-  type token
-  let token: token structure typ = structure "AspellToken"
-  let offset = field token "offset" uint
-  let len = field token "len" uint
-  let () = seal token
+  type c_token
+  let c_token: c_token structure typ = structure "AspellToken"
+  let offset = field c_token "offset" int
+  let len = field c_token "len" int
+  let () = seal c_token
 
-  type t
-  let prim_t : t structure typ = structure "AspeelDocumentChecker"
-  let t = ptr prim_t
+  type token = { offset: int; len: int }
+  let token = view
+      ~read:(fun x -> { offset = getf x offset; len = getf x len } )
+      ~write:(fun x -> let y = make c_token in
+               setf y len x.len; setf y offset x.offset;
+               y
+             )
+      c_token
+  
+  type prim
+  let prim_t : prim structure typ = structure "AspellDocumentChecker"
+  type t = prim Ctypes.structure Ctypes_static.ptr    
+
+  let t : t typ = ptr prim_t
   let core_name = "aspell_document_checker"
   let pre = core_name ^ "_"
   let post = "_" ^ core_name
@@ -398,8 +369,9 @@ module Document_checker = struct
       
   let delete = fpt "delete" @@ t @-> returning void
   let error_number, error_msg, error = Error.bind pre t                               
-  
 
+  
+  let unwrap = fpt "to" @@ Result.c @-> returning t
 
   (** Creates a new document checker.
     The speller class is expected to last until
@@ -410,16 +382,16 @@ module Document_checker = struct
     If filter is given then it will take ownership of
     the filter class and use it to do the filtering.
       You are expected to free the checker when done. *)
-  let c_create = fpt "new" @@ Speller.t @-> returning Result.c
-
-  let unwrap = fpt "to" @@ Result.c @-> returning t
-  let create speller = Result.convert unwrap @@ c_create speller                                
+  let create speller =
+    let c_create = fpt "new" @@ Speller.t @-> returning Result.c in
+    Result.convert unwrap @@ c_create speller                                
 
   
 (** Reset the internal state of the filter.
   Should be called whenever a new document is
     being filtered. *)
 let reset = fp "reset" @@ t @-> returning void
+
 
 (** Process a string.
     The string passed in should only be split on
@@ -429,14 +401,15 @@ let reset = fp "reset" @@ t @-> returning void
     in the document.  Passing in strings out of
     order, skipping strings or passing them in
     more than once may lead to undefined results. *)
-let c_process = fp "process" @@ t @-> string @-> int @-> returning void
-let process dc s = c_process dc @@@ s 
+let process dc s =
+  let c_process = fp "process" @@ t @-> string @-> int @-> returning void in
+  c_process dc @@@ s 
 
 (** Returns the next misspelled word in the
     processed string.  If there are no more
     misspelled words, then token.word will be
     NULL and token.size will be 0 *)
-let c_next_misspelling = fp "next_misspelling" @@ t @-> returning token
+let next_misspelling = fp "next_misspelling" @@ t @-> returning token
                                                     
 (** Returns the underlying filter class. *)
 let filter =  fp "filter" @@ t @-> returning Filter.t
@@ -448,19 +421,48 @@ end
 module Info = struct
   module Module = struct 
     type s_t
-    let t : s_t structure typ = structure "AspellModuleInfo"
-    let name = field t "name" string
-    let order_num = field t "order_num" double
-    let lib_dir = field t "lib_dir" string
-    let dict_dirs = field t "dict_dirs" String_list.t
-    let dict_exts = field t "dict_exts" String_list.t     
-    let () = seal t
+    let c : s_t structure typ = structure "AspellModuleInfo"
+    let name = field c "name" string
+    let order_num = field c "order_num" double
+    let lib_dir = field c "lib_dir" string
+    let dict_dirs = field c "dict_dirs" String_list.t
+    let dict_exts = field c "dict_exts" String_list.t     
+    let () = seal c
+
+    type t = {
+      name : string
+    ; order_num : float
+    ; lib_dir : string
+    ; dict_dirs : string list
+    ; dict_exts : string list
+    }
+
+    let t = view
+        ~read:( fun x -> let g n = getf x n in
+                { name = g name
+                ; order_num = g order_num
+                ; lib_dir = g lib_dir
+                ; dict_dirs = g dict_dirs
+                ; dict_exts = g dict_exts
+                }
+              )
+        ~write:( fun x ->
+            let y = make c in
+            let s n = setf y n in
+            s name x.name
+          ; s order_num x.order_num
+          ; s lib_dir x.lib_dir
+          ; s dict_dirs x.dict_dirs
+          ; s dict_exts x.dict_exts
+          ; y
+          )
+        c
 
   module Enum = Make_enum( struct
       let s_name = "AspellModuleInfoEnumeration"
       let core_name = "aspell_module_info_enumeration"
-      type r = s_t structure Ctypes_static.ptr
-      let r = ptr_opt t
+      type r = t
+      let r = opt t
     end)
   
   module List = struct
@@ -474,27 +476,27 @@ module Info = struct
     let get = fpt "get" @@ Config.t @-> returning t
     let is_empty = fp "empty" @@ t @-> returning bool
     let size = fp "size" @@ t @-> returning uint
-    let c_elements = fp "elements" @@ t @-> returning Enum.t
+    let elements = Enum.listify @@ fp "elements" @@ t @-> returning Enum.t
   end
     
   end
   module Dict = struct
   type s_t
-  let t : s_t structure typ = structure "AspellDictInfo"
+  let c : s_t structure typ = structure "AspellDictInfo"
   (** The Name to identify this dictionary by. *)
-  let name = field t "name" string
+  let name = field c "name" string
   (** The language code to identify this dictionary.
       A two letter UPPER-CASE ISO 639 language code
       and an optional two letter ISO 3166 country
       code after a dash or underscore. *)
-  let code = field t "code" string
+  let code = field c "code" string
       
   (** Any extra information to distinguish this
       variety of dictionary from other dictionaries
       which may have the same language and size. *)
-  let jargon = field t "jargon" string
+  let jargon = field c "jargon" string
 
-  let size = field t "size" int
+  let size = field c "size" int
 
   (** A two char digit code describing the size of
     the dictionary: 10=tiny, 20=really small,
@@ -504,17 +506,50 @@ module Info = struct
    see SCOWL (http://wordlist.sourceforge.net)
       for an example of how these sizes are used. *)
       
-  let size_str = field t "size_str" string
+  let size_str = field c "size_str" string
 
-  let module_ = field t "module" @@ ptr Module.t
+  let module_ = field c "module" @@ ptr Module.t
 
-
+  type t ={
+    name : string
+  ; code : string
+  ; jargon : string
+  ; size : int
+  ; size_str : string
+  ; module_ : Module.t
+  }
+  
+  let t = view
+      ~read: (fun x ->
+          let g n = getf x n in
+          {
+            name = g name
+          ; code = g code
+          ; jargon = g jargon
+          ; size = g size
+          ; size_str = g size_str
+          ; module_ = !@ (g module_)
+          }
+        )
+      ~write:(fun x ->
+          let y = make c in
+          let s n = setf y n in
+          s name x.name
+        ; s code x.code
+        ; s jargon x.jargon
+        ; s size x.size
+        ; s size_str x.size_str
+        ; s module_ (allocate Module.t x.module_)
+        ; y
+        )
+      c
+     
 
   module Enum = Make_enum( struct
       let s_name = "AspellDictInfoEnumeration"
       let core_name = "aspell_dict_info_enumeration"
-      type r = s_t structure Ctypes_static.ptr
-      let r = ptr_opt t
+      type r = t
+      let r = opt t
     end)
 
   module List = struct
@@ -536,12 +571,18 @@ module Info = struct
 end
 
 
+type cache = Decode | Dictionary | Language | Keyboard
+let cache = view
+    ~read:( function "decode" -> Decode | "dictionary" -> Dictionary | "language" -> Language | "keyboard" -> Keyboard | _ -> assert false)
+    ~write:( function Decode -> "decode" | Dictionary -> "dictionary" | Language -> "language" | Keyboard -> "keyboard" )
+    string
+
  (** Reset the global cache(s) so that cache queries will
      create a new object. If existing objects are still in
      use they are not deleted. If which is NULL then all
      caches will be reset. Current caches are "encode",
      "decode", "dictionary", "language", and "keyboard". *)
-let c_reset_cache = foreign "aspell_reset_cache" @@ string @-> returning bool
+let reset_cache = foreign "aspell_reset_cache" @@ cache @-> returning bool
 
 
 
