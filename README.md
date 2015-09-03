@@ -1,12 +1,12 @@
-The ocaml-aspell library is a partial ctype based binding to [gnu aspell dictionary library] (http://aspell.net/man-html/).
+The ocaml-aspell library is a partial ctype based binding to [gnu aspell spell checker library] (http://aspell.net).
 
 
 This library revolves mainly around two submodule `Config` and `Speller`. The `Config`
-submodule defines an abstract config type `Config.t` for aspell dictionary and the associated functions. The `Speller` submodule defines an abstract `Speller.t` type which can be used to check word spelling, suggest nearby spelling, add new word to the session or personal dictionary. 
+submodule defines an abstract configuration type `Config.t` for aspell dictionary and the associated functions. The `Speller` submodule defines an abstract `Speller.t` type which can be used to check word spelling, suggest nearby spelling or add new word to the session or personal dictionary. 
 
 Note that the binding try to abstract away most of the C idiosyncrasies of the original 
-API. Particularly, prefix in function names are replaced by proper submodule:
-`aspell_config_replace` is mapped to `Aspell.Config.replace`. Abstract types and records in the original C API are mapped to abstract OCaml types and records respectively. Most of the helper classes presents in the C API have been erased in favor to standard OCaml types. 
+API. Particularly, prefix in function names are replaced by submodule:
+For instance, `aspell_config_replace` is mapped to `Aspell.Config.replace`. Abstract types and records in the original C API are mapped to abstract OCaml types and records respectively. Most of the helper classes presents in the C API have been erased in favor to standard OCaml types. 
 
 ##Usage
 The first step to use the library is to create a configuration object with
@@ -84,7 +84,7 @@ It is better to let the spell checker manage these words rather than doing it yo
 
 The list of words in the personal and session dictionary can be checked using
 `Speller.word_list` function
-```
+```OCaml
     let () = 
       let words = Speller.(word_list Session spellchecker) in
       List.iter (Printf.printf "%s\n") words
