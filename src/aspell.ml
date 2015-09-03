@@ -106,14 +106,19 @@ module Config = struct
   let t : t typ = ptr prim_t
 
   let pre = "aspell_config_"
-  let create : unit -> t = foreign "new_aspell_config" ( void @-> returning t )
+  let unsafe_create : unit -> t = foreign "new_aspell_config" ( void @-> returning t )
   let replace = foreign "aspell_config_replace" ( t @-> string @-> string @-> returning void)
   let clone = foreign "aspell_config_clone" ( t @-> returning t )
   let delete = foreign "delete_aspell_config" ( t @-> returning void )
   let with_ f =
-           let d = create () in
+           let d = unsafe_create () in
            let x = f d in
            delete d; x
+
+  let create () =
+    let c = unsafe_create () in
+    Gc.finalise delete c;
+    c
   let assign = foreign "aspell_config_assign" @@ t @-> t @-> returning void
 
   let error_number, error_msg, error = Error.bind pre t
@@ -301,10 +306,21 @@ module Speller = struct
   
 
   let unwrap = foreign "to_aspell_speller" ( Result.c @-> returning t )
- let create config = 
+ let unsafe_create config = 
   let c_create = foreign "new_aspell_speller" ( Config.t @-> returning Result.c)
   in Result.convert unwrap @@ c_create config 
-  
+
+
+ let delete = foreign "delete_aspell_speller" ( t @-> returning void )
+ let create conf =
+   let speller = unsafe_create conf in
+   let () =
+     match speller with
+     | `Error _ -> ()
+     | `Ok s -> Gc.finalise delete s in
+     speller
+ 
+ 
 (** returns  0 if it is not in the dictionary,
     1 if it is, or -1 on error. *)
  let check speller word = 
@@ -336,8 +352,6 @@ module Speller = struct
   let add_to = function
     | Session -> add_to_session
     | Personal -> add_to_personal
-  
-  let delete = foreign "delete_aspell_speller" ( t @-> returning void )
   
   let error_number, error_msg, error = Error.bind pre t
   let config = fp "config" @@ t @-> returning Config.t                                                      
@@ -423,10 +437,16 @@ module Document_checker = struct
     If filter is given then it will take ownership of
     the filter class and use it to do the filtering.
       You are expected to free the checker when done. *)
-  let create speller =
+  let unsafe_create speller =
     let c_create = fpt "new" @@ Speller.t @-> returning Result.c in
     Result.convert unwrap @@ c_create speller                                
 
+  let create speller =
+    let dc = unsafe_create speller in
+    let () = match dc with
+      | `Error _ -> ()
+      | `Ok dc -> Gc.finalise delete dc in
+    dc
   
 (** Reset the internal state of the filter.
   Should be called whenever a new document is

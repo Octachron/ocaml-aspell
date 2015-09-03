@@ -61,7 +61,6 @@ module Config :
 
     val create : unit -> t
     val clone : t -> t
-    val delete : t -> unit
     val with_ : (t -> 'a) -> 'a
     val assign : t -> t -> unit
 
@@ -72,7 +71,13 @@ module Config :
     (** Sets extra keys which this config class should accept *)
     val set_extra : t -> Key.info list -> unit
 
+    (** Returns the Key.Info.t descriptor for the
+        corresponding key or returns None and sets
+        error_num to PERROR_UNKNOWN_KEY if the key is
+        not valid *)
     val key_info : t -> string -> Key.info option
+
+    (** Returns a list of all possible keys available within the configuration. *)
     val possible_elements : t -> bool -> Key.info list
     val get_default : t -> string -> string option
 
@@ -85,6 +90,8 @@ module Config :
     val mem : t -> string -> bool
     (** Retrieve the value of a key.*)
     val find : t -> string -> Key.value option
+
+    (** Experimental strongly typed key function *)
     module Typed : sig 
       val find : t -> 'a Key.Typed.t -> 'a option
     end
@@ -100,7 +107,6 @@ module Speller :
     type t
 
     val create : Config.t -> t Result.t
-    val delete : t -> unit
 
     val config : t -> Config.t
     
@@ -144,12 +150,15 @@ module Document_checker :
     type token = { offset : int; len : int; }
     type t
 
-    val delete : t -> unit
+    val create : Speller.t  -> t Result.t
+    
     val error_number : t -> Unsigned.uint
     val error_msg : t -> string
     val error : t -> Error.t
-    val create : Speller.t  -> t Result.t
-        
+
+    (** Reset the internal state of the filter.
+        Should be called whenever a new document is
+        being filtered. *)
     val reset : t -> unit
       
     (** Process a string.
