@@ -1,0 +1,22 @@
+OASISFormat: 0.4
+Name:        ocaml-aspell
+Version:     0.1
+Synopsis:    Ocaml binding for gnu aspell
+Authors:     octachron
+License:     GPL-3
+Plugins:     META (0.4), DevFiles (0.4)
+
+Library "ocaml-aspell"
+  Path:            src
+  BuildTools:      ocamlbuild
+  Modules:         Aspell, Aspell_errors
+  InternalModules: Aspell_common, Aspell_raw
+  BuildDepends: ctypes.foreign
+  CClib: -laspell
+Executable basic
+  Path:       examples
+  BuildTools: ocamlbuild
+  MainIs:     basic.ml
+  BuildDepends: ocaml-aspell
+  Install:    false
+  CompiledObject: best

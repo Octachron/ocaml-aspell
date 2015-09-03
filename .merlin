@@ -1,4 +1,5 @@
 S src
+S examples
 S tests
 B _build/*
 PKG ctypes ctypes.foreign

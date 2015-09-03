@@ -1,8 +1,10 @@
 
 module Key :   sig
-  type kind = String | Int | Bool | List
-    val show_kind : kind -> string
-
+  module Kind: sig
+    type t = String | Int | Bool | List
+    val show : t -> string
+  end
+  
     type value =
         String of string
       | Int of int
@@ -15,7 +17,7 @@ module Key :   sig
       (** The name of the key *)
       name : string;
       (** Key type *)
-      type_ : kind;
+      type_ : Kind.t;
       (** Default value *) 
       def : string;
       (** Brief description *)
@@ -27,6 +29,22 @@ module Key :   sig
     }
 
     val show : info -> string
+
+    module Typed : sig
+      type 'a kind =
+        | String: string kind
+        | Int: int kind
+        | Bool: bool kind
+        | List: string list kind
+
+      type 'a t
+      val info : 'a t -> info
+      exception Key_type_error
+      val convert: 'a kind -> info -> 'a t
+      
+    end
+
+      
   end
 
 module Error :
@@ -67,6 +85,9 @@ module Config :
     val mem : t -> string -> bool
     (** Retrieve the value of a key.*)
     val find : t -> string -> Key.value option
+    module Typed : sig 
+      val find : t -> 'a Key.Typed.t -> 'a option
+    end
   end
   
 module Result :
@@ -90,13 +111,22 @@ module Speller :
     val error_msg : t -> string
     val error : t -> Error.t
 
-    val store_replace : t -> string -> string -> unit
-    val add_to_session : t -> string -> unit
-    val add_to_personal : t -> string -> unit
-    
-    val personal_word_list : t -> string list
-    val session_word_list : t -> string list
-    val main_word_list : t -> string list
+    (** Store a replacement for a mispelled word *)
+    val store_replace : t -> mispelled:string -> correction:string -> unit
+
+    (** Auxiliary dictionary type: Either session or personal *)
+    type auxiliary_dict = Personal | Session
+                          
+    (** Add a new word in the session or personal dictionary *)
+    val add_to : auxiliary_dict -> t -> string -> unit
+
+    (** Retrieve the list of word in the session or personal dictionary *)
+    val word_list : auxiliary_dict ->  t -> string list
+
+    (** Raise an segfault from inside libaspell ... 
+    val main_word_list : t -> string list 
+    *)
+
     val save_all_word_lists : t -> bool
     val clear_session : t -> bool
   end
@@ -167,6 +197,5 @@ val cache : cache Ctypes.typ
     
 (** Reset the global cache(s) so that cache queries will
      create a new object. If existing objects are still in
-     use they are not deleted. If which is NULL then all
-     caches will be reset. *)
+     use they are not deleted. *)
 val reset_cache : cache -> bool

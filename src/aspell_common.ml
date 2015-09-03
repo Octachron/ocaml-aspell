@@ -22,19 +22,21 @@ let names core = core, core ^ "_", "_"^ core
 module Key = struct
   
   (** The type of the key *)
-  type kind = String | Int | Bool | List
-  let show_kind = function
-    | String -> "string"
-    | Int -> "int"
-    | Bool -> "bool"
-    | List -> "list"
+  module Kind = struct 
+    type t = String | Int | Bool | List
+    let show = function
+      | String -> "string"
+      | Int -> "int"
+      | Bool -> "bool"
+      | List -> "list"
   
-  let kind =
+  let t =
     view
       ~read:( function 0 -> String | 1 -> Int | 2 -> Bool | 3 -> List | _ -> assert false) 
       ~write: ( function String -> 0 | Int -> 1 | Bool -> 2 | List -> 3 )
       int
-
+  end
+  
   type value =
     | String of string
     | Int of int
@@ -56,7 +58,7 @@ module Key = struct
   (** The name of the key *)
   let name = field c "name" string_flat
   (** Key type *)
-  let type_ = field c "type_" kind
+  let type_ = field c "type_" Kind.t
   (** Default value *) 
   let def = field c "def" string_flat
   (** Brief description *)
@@ -69,7 +71,7 @@ module Key = struct
 
   type info = {
     name: string
-  ; type_: kind
+  ; type_: Kind.t
   ; def: string
   ; desc: string
   ; flags: int
@@ -120,10 +122,40 @@ module Key = struct
   ; flags = %d\
   ; other_data = %d }"
  k.name
- (show_kind k.type_)
+ (Kind.show k.type_)
  k.def
  k.desc
  k.flags
  k.other_data
+
+ module Typed = struct
+  (** Gadt version of key type *)
+  type 'a kind =
+    | String: string kind
+    | Int: int kind
+    | Bool: bool kind
+    | List: string list kind
+
+  let weaken (type a) (x:a kind) =
+    match x with
+    | String -> Kind.String
+    | Bool -> Kind.Bool
+    | Int -> Kind.Int
+    | List -> Kind.List
+
+                    
+  type 'a t = { info : info; kind : 'a kind }
+  let info x = x.info
+  let name x = x.info.name
+  
+  exception Key_type_error
+  let convert kind info =
+    if weaken kind = info.type_ then
+      { info; kind }
+    else
+     raise Key_type_error
+  
+ end
+
   
 end

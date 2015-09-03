@@ -9,7 +9,6 @@ type 'a colored_int = private int
 
 module Key = Aspell_common.Key
 
-  
 module Error = struct
 
   
@@ -210,18 +209,18 @@ let find config key =
   let open Key in
   match key_info config key with
   | None -> None
-  | Some k -> 
+  | Some k ->
     match k.type_ with
-    | Int ->
+    | Kind.Int ->
       let n = find_int config key in
       if n = -1 then None else Some ( Int n )
-    | String ->
+    | Kind.String ->
       let s = find_string config key in
       ( match s with
         | None -> None
         | Some s -> Some ( String s )
       )
-    | Bool ->
+    | Kind.Bool ->
       let b = find_bool config key in
       (match b with
        | -1 -> None
@@ -229,12 +228,43 @@ let find config key =
        | 1 -> Some (Bool false)
        | _ -> assert false
       )
-    | List ->
+    | Kind.List ->
       let l = String_list.create () in
       let m = String_list.to_mutable_container l  in
       match find_list config key m with
       | false -> None
       | true -> Some ( List ( String_list.to_list l ) )
+
+module Typed = struct
+  let find (type a) config (key:a Key.Typed.t ) : a option =
+    let open Key.Typed in
+    match key.kind with
+        | Int ->
+      let n = find_int config @@ name key in
+      if n = -1 then None else Some n
+    | String ->
+      let s = find_string config @@ name key in
+      ( match s with
+        | None -> None
+        | Some s -> Some ( s )
+      )
+    | Bool ->
+      let b = find_bool config @@ name key in
+      (match b with
+       | -1 -> None
+       | 0 -> Some (true)
+       | 1 -> Some (false)
+       | _ -> assert false
+      )
+    | List ->
+      let l = String_list.create () in
+      let m = String_list.to_mutable_container l  in
+      match find_list config (name key) m with
+      | false -> None
+      | true -> Some ( String_list.to_list l )
+
+
+end
 
 end
 
@@ -290,9 +320,11 @@ module Speller = struct
 
   let store_replace =
     let c = fp "store_replacement" @@ t @-> string @-> int @-> string @-> int @-> returning void in
-    fun speller mispelled replacement ->
-      (c speller @@@ mispelled) @@@ replacement
+    fun speller ~mispelled ~correction ->
+      (c speller @@@ mispelled) @@@ correction
 
+  type auxiliary_dict = Personal | Session
+  
   let add_to_session =
     let c= fp "add_to_session"@@  t @-> string @-> int @-> returning void in
     fun t word -> c t @@@ word
@@ -300,6 +332,10 @@ module Speller = struct
   let add_to_personal =
     let c = fp "add_to_personal" @@ t @-> string @-> int @-> returning void in
     fun t word -> c t @@@ word
+
+  let add_to = function
+    | Session -> add_to_session
+    | Personal -> add_to_personal
   
   let delete = foreign "delete_aspell_speller" ( t @-> returning void )
   
@@ -313,6 +349,11 @@ module Speller = struct
   let session_word_list list=
     let f = fp "session_word_list" @@ t @-> returning Word_list.t in
     Word_list.to_list @@ f list
+
+  let word_list = function
+    | Session -> session_word_list
+    | Personal -> personal_word_list
+  
   let main_word_list list =
     let f = fp "main_word_list" @@ t @-> returning Word_list.t in
     Word_list.to_list @@ f list
